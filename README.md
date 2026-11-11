@@ -211,12 +211,21 @@ A local endpoint wins when configured. It is expected to answer `POST /v1/images
 
 Slow renders do not block the turn: `board_image` reserves the rectangle, returns in ~10ms, and the image lands when the pipeline answers. A pipeline failure is a visible `failed` object, never a silent hole.
 
+## Screenshots
+
+![The board and the chat beside it](docs/media/screens/01-board.png)
+
+![A replay parked part way through, rebuilding the drawing stroke by stroke](docs/media/screens/02-replay.png)
+
 ## Disclosures
 
-- Boards and images live in `<hermes home>/charrette/`. Nothing is uploaded by this plugin.
-- When `board_look` is used, a **crop of the selection** is sent to your configured vision model through Hermes. Without it, the board still works from labels.
-- `board_image source=search` queries the Wikimedia Commons API. `source=url` fetches the URL you supplied. `source=generate|edit` calls the endpoint you configured.
-- No credentials are read from files by the plugin; the image key comes from env or `config.json`.
+Everything a user would want to know before installing.
+
+- **A local web server.** `charrette open` binds **127.0.0.1:8196** by default and prints a per-session token in the URL; the page sends it as a header on every API call. Setting `CHARRETTE_BIND` and `CHARRETTE_PUBLIC_BASE` serves the board past loopback (a tailnet name, a LAN name, a tunnel), and anyone holding that URL token can read and draw on it. This is the one setting where a mistake exposes a board to more than this machine.
+- **Model credentials.** The board's chat needs a model. It reads, in order: `CHARRETTE_LLM_API_KEY` from the environment, then its own `keys.json`, then, as a fallback so a fresh install works with no setup, the provider credentials Hermes already holds. That last step imports `hermes_cli.auth.resolve_api_key_provider_credentials`, which is a private module rather than a documented plugin seam; the import is guarded and absent is fine. It is listed here because catalog rule 9 flags it and a reviewer should not have to find it.
+- **What leaves the machine.** Boards and images live in `<hermes home>/charrette/` and the plugin uploads nothing itself. `board_look` sends a **crop of the selection** to your configured vision model through Hermes; without vision the board still works from labels. `board_image source=search` queries the Wikimedia Commons API, `source=url` fetches the URL you supplied, and `source=generate|edit` calls your configured image endpoint.
+- **No shell.** The plugin runs no subprocess and no shell command. Headless rendering is in-process Python, not a browser tab.
+- **No telemetry.** Nothing is reported anywhere.
 
 ## Limits
 
