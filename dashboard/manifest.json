@@ -1,0 +1,9 @@
+{
+  "name": "charrette",
+  "label": "Charrette",
+  "description": "Shared whiteboard: your ink and the agent's drawings on one board",
+  "version": "0.1.0",
+  "icon": "Pencil",
+  "tab": { "hidden": true },
+  "api": "plugin_api.py"
+}

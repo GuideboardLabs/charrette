@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+board.log
+desktop/plugin.js
+*.tmp
+board.env
+*.env
+.venv/
+node_modules/
+.replay/

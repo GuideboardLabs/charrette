@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>charrette</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header id="bar">
+    <div class="brand">charrette</div>
+
+    <div class="boards">
+      <button id="boardMenu" class="ghost board-btn" aria-haspopup="true" aria-expanded="false" title="switch board">
+        <span id="boardName">board 1</span><span class="caret">&#9662;</span>
+      </button>
+      <div id="boardList" class="board-list" hidden></div>
+      <button id="newBoard" class="ghost tiny" title="new board">+</button>
+    </div>
+
+    <div class="palette">
+      <div id="swatches" class="swatches"></div>
+      <div class="widths">
+        <button class="w" data-w="2" title="thin"></button>
+        <button class="w on" data-w="3" title="normal"></button>
+        <button class="w" data-w="5" title="heavy"></button>
+      </div>
+    </div>
+
+    <div class="right">
+      <button id="chatToggle" class="ghost" title="talk to the board (ctrl+j)" aria-pressed="false">chat</button>
+      <button id="undo" class="ghost" title="undo (ctrl+z)">undo</button>
+      <button id="fit" class="ghost" title="fit (F)">fit</button>
+      <button id="scrubToggle" class="ghost" title="replay history (shift+t)" aria-pressed="false">replay</button>
+      <button id="shortcutHelp" class="ghost shortcut-help" title="keyboard shortcuts (?)" aria-haspopup="dialog" aria-expanded="false">?</button>
+      <span id="zoom" class="stat zoom" aria-label="board zoom">100%</span>
+      <span id="stat" class="stat"></span>
+    </div>
+  </header>
+
+  <main id="main">
+    <nav id="rail" aria-label="tools">
+      <button class="tool" data-tool="select" aria-label="Select tool" data-tip="Select · V" title="select (V)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.75 13.2 9 9 10.1l-2.25 4.65z"/><path d="m9.3 10.2 3.25 3.25"/></svg></button>
+      <button class="tool" data-tool="hand" aria-label="Hand tool" data-tip="Hand · H" title="hand (H)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.25 8V5.5a1 1 0 0 1 2 0V8 4.25a1 1 0 0 1 2 0V8 5a1 1 0 0 1 2 0v3.25-1.5a1 1 0 0 1 2 0v3.5c0 3.1-1.8 5-4.75 5H8c-1.5 0-2.45-.8-3.1-1.9L3 10.1a1.05 1.05 0 0 1 1.75-1.15l1.5 1.8"/></svg></button>
+      <button class="tool on" data-tool="pen" aria-label="Pen tool" data-tip="Pen · P" title="pen (P)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11.2 3.1 3.7 3.7-8.4 8.4-3.9.8.8-3.9z"/><path d="m9.8 4.5 3.7 3.7M3.4 12.1l3.1 3.1"/></svg></button>
+      <button class="tool" data-tool="highlighter" aria-label="Highlighter tool" data-tip="Highlighter · M" title="highlighter (M)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10.9 2.7 4.4 4.4-7.1 7.1-4.4-4.4z"/><path d="m3.8 9.8-1.3 3.7 2 2 3.7-1.3M9.4 4.2l4.4 4.4M2.5 15.5h5"/></svg></button>
+      <button class="tool" data-tool="eraser" aria-label="Eraser tool" data-tip="Eraser · E" title="eraser (E)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.7 2.8 5.5 5.5-6.9 6.9H5.2L2.8 12.8z"/><path d="m6.1 9.5 4.4 4.4M8.3 15.2h7"/></svg></button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="tool" data-tool="rect" aria-label="Rectangle tool" data-tip="Rectangle · R" title="rectangle (R)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.75" y="4" width="12.5" height="10" rx="1"/></svg></button>
+      <button class="tool" data-tool="ellipse" aria-label="Ellipse tool" data-tip="Ellipse · O" title="ellipse (O)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="9" cy="9" rx="6.25" ry="5"/></svg></button>
+      <button class="tool" data-tool="diamond" aria-label="Diamond tool" data-tip="Diamond · D" title="diamond (D)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></button>
+      <button class="tool" data-tool="triangle" aria-label="Triangle tool" data-tip="Triangle · G" title="triangle (G)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.75 15.5 15H2.5z"/></svg></button>
+      <button class="tool" data-tool="line" aria-label="Line tool" data-tip="Line · L" title="line (L)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 15 12-12"/></svg></button>
+      <button class="tool" data-tool="arrow" aria-label="Arrow tool" data-tip="Arrow · A" title="arrow (A)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15 15 3M9 3h6v6"/></svg></button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="tool" data-tool="table" aria-label="Table tool" data-tip="Table · B" title="table (B)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="13" height="12" rx="1"/><path d="M2.5 7h13M7 3v12M11.5 3v12"/></svg></button>
+      <button class="tool" data-tool="chart" aria-label="Bar chart tool" data-tip="Bar chart · C" title="bar chart (C)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 15.5h13M4 13V9h2.5v4M8 13V4h2.5v9M12 13V6.5h2.5V13"/></svg></button>
+      <button class="tool" data-tool="chartline" aria-label="Line chart tool" data-tip="Line chart · Shift+C" title="line chart (shift+C)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 15.5h13M3.5 12l3.1-3.1 2.7 1.8 4.7-6"/><circle cx="3.5" cy="12" r=".75" fill="currentColor" stroke="none"/><circle cx="6.6" cy="8.9" r=".75" fill="currentColor" stroke="none"/><circle cx="9.3" cy="10.7" r=".75" fill="currentColor" stroke="none"/><circle cx="14" cy="4.7" r=".75" fill="currentColor" stroke="none"/></svg></button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="tool" data-tool="text" aria-label="Text tool" data-tip="Text · T" title="text (T)"><svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10M9 4v10M6.5 14h5"/></svg></button>
+    </nav>
+
+    <section id="stage">
+      <canvas id="board"></canvas>
+      <input id="textEdit" class="text-edit" spellcheck="false" autocomplete="off" />
+      <section id="emptyBoard" class="empty-board" aria-label="Empty board">
+        <span class="empty-kicker">Empty board</span>
+        <strong>Your marker is ready.</strong>
+        <div class="empty-actions">
+          <span class="empty-tool">Pen <kbd>P</kbd></span>
+          <button id="emptyChat" type="button">Ask the board</button>
+          <button id="emptyShortcuts" type="button" aria-label="Open keyboard shortcuts">Shortcuts <kbd>?</kbd></button>
+        </div>
+      </section>
+      <button id="activityJump" class="activity-jump" type="button" hidden>
+        <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M3 9h11M10 5l4 4-4 4"/></svg>
+        <span>Agent drew off-screen</span>
+      </button>
+    <div id="scrubber" class="scrubber" hidden aria-label="board history">
+      <button id="scrubPlay" class="scrub-btn" type="button" title="play or pause (space)">play</button>
+      <input id="scrubRange" class="scrub-range" type="range" min="0" max="1000" value="0" step="1"
+             aria-label="replay position">
+      <span id="scrubClock" class="scrub-clock">0:00</span>
+      <div class="speeds" id="scrubSpeeds" role="group" aria-label="replay speed">
+        <button type="button" data-speed="0.5">0.5x</button>
+        <button type="button" data-speed="1" class="on">1x</button>
+        <button type="button" data-speed="2">2x</button>
+        <button type="button" data-speed="5">5x</button>
+      </div>
+      <button id="scrubClose" class="scrub-x" type="button" title="close (shift+t)" aria-label="Close the replay bar"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button>
+    </div>
+    <button id="minimap" class="minimap" type="button" aria-label="Board map. Click to pan without changing zoom">
+      <canvas id="minimapCanvas" width="140" height="90" aria-hidden="true"></canvas>
+    </button>
+  </section>
+
+<aside id="chat" class="chat" hidden aria-label="board session">
+      <header class="chat-head">
+        <span id="chatDot" class="chat-dot" aria-hidden="true"></span>
+        <span id="chatModel" class="chat-model">session</span>
+        <button id="chatReset" class="ghost tiny" title="clear this board's conversation">clear</button>
+      </header>
+      <div class="chat-body">
+        <div id="chatLog" class="chat-log" aria-live="polite" aria-relevant="additions text"></div>
+        <div id="chatEmpty" class="chat-empty">
+          <span class="chat-empty-kicker">The board is listening</span>
+          <strong>Start with a mark.</strong>
+          <p>Ask for a shape, a connection, or a second thought on what is already here.</p>
+        </div>
+        <div id="chatThinking" class="chat-thinking" hidden>
+          <span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>working at the board</span>
+        </div>
+      </div>
+      <form id="chatForm" class="chat-form" autocomplete="off">
+        <textarea id="chatText" rows="1" placeholder="Ask the board…" aria-label="Message the board" spellcheck="false"></textarea>
+        <button id="chatSend" type="submit" aria-label="Send message" title="send (enter)">
+          <span id="chatSendLabel">send</span>
+        </button>
+      </form>
+    </aside>
+  </main>
+
+  <section id="shortcutSheet" class="shortcut-sheet" role="dialog" aria-modal="true" aria-labelledby="shortcutTitle" hidden>
+    <div class="shortcut-card">
+      <header><div><span class="shortcut-kicker">Reference</span><h1 id="shortcutTitle">Keyboard shortcuts</h1></div><button id="shortcutClose" class="shortcut-close" aria-label="Close keyboard shortcuts">close</button></header>
+      <div class="shortcut-groups">
+        <section><h2>Tools</h2><dl>
+          <div><dt>Select</dt><dd><kbd>V</kbd></dd></div><div><dt>Hand</dt><dd><kbd>H</kbd></dd></div>
+          <div><dt>Pen</dt><dd><kbd>P</kbd></dd></div><div><dt>Highlighter</dt><dd><kbd>M</kbd></dd></div>
+          <div><dt>Eraser</dt><dd><kbd>E</kbd></dd></div><div><dt>Text</dt><dd><kbd>T</kbd></dd></div>
+        </dl></section>
+        <section><h2>Shapes</h2><dl>
+          <div><dt>Rectangle</dt><dd><kbd>R</kbd></dd></div><div><dt>Ellipse</dt><dd><kbd>O</kbd></dd></div>
+          <div><dt>Diamond</dt><dd><kbd>D</kbd></dd></div><div><dt>Triangle</dt><dd><kbd>G</kbd></dd></div>
+          <div><dt>Line</dt><dd><kbd>L</kbd></dd></div><div><dt>Arrow</dt><dd><kbd>A</kbd></dd></div>
+        </dl></section>
+        <section><h2>Structured</h2><dl>
+          <div><dt>Table</dt><dd><kbd>B</kbd></dd></div><div><dt>Bar chart</dt><dd><kbd>C</kbd></dd></div>
+          <div><dt>Line chart</dt><dd><kbd>Shift+C</kbd></dd></div><div><dt>Ink colour</dt><dd><kbd>1–5</kbd></dd></div>
+        </dl></section>
+        <section><h2>Board</h2><dl>
+          <div><dt>Undo</dt><dd><kbd>Ctrl/Cmd+Z</kbd></dd></div><div><dt>Delete selection</dt><dd><kbd>Delete/Backspace</kbd></dd></div>
+          <div><dt>Fit board</dt><dd><kbd>F</kbd></dd></div><div><dt>Board session</dt><dd><kbd>Ctrl/Cmd+J</kbd></dd></div>
+          <div><dt>Send message</dt><dd><kbd>Enter</kbd></dd></div><div><dt>New line</dt><dd><kbd>Shift+Enter</kbd></dd></div>
+          <div><dt>Close panel</dt><dd><kbd>Escape</kbd></dd></div><div><dt>This sheet</dt><dd><kbd>?</kbd></dd></div>
+        </dl></section>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

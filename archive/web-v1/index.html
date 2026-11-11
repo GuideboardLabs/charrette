@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>chalk</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header id="bar">
+    <div class="brand">chalk</div>
+    <div id="boardName" class="board">board</div>
+    <div class="tools">
+      <button id="tPen" class="tool on" title="pen (P)">pen</button>
+      <button id="tHand" class="tool" title="hand (H)">hand</button>
+    </div>
+    <div id="swatches" class="swatches"></div>
+    <div class="widths">
+      <button class="w" data-w="2" title="thin"><i style="--d:3px"></i></button>
+      <button class="w on" data-w="3" title="normal"><i style="--d:5px"></i></button>
+      <button class="w" data-w="5" title="heavy"><i style="--d:8px"></i></button>
+      <button class="w hi" data-w="18" title="highlighter"><i class="bar"></i></button>
+    </div>
+    <div class="right">
+      <button id="fit" class="ghost" title="fit (F)">fit</button>
+      <span id="stat" class="stat"></span>
+    </div>
+  </header>
+  <main id="stage">
+    <canvas id="board"></canvas>
+    <div id="hint" class="hint">draw with the mouse. the agent draws in teal.</div>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
