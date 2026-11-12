@@ -444,10 +444,10 @@ def _wildcard_host() -> str:
 
 class BoardServer:
     def __init__(self, store: Store | None = None, port: int | None = None, verbose: bool = False,
-                 host: str | None = None):
+                 host: str | None = None, llm=None):
         self.store = store or Store()
-        # one chat per board; it runs the board's own verbs as tools against this store
-        self.chat = BoardChat(self.store, SCHEMAS, make_handlers(self.store))
+        # one chat per board; it plans against the Hermes session and runs the board's verbs here
+        self.chat = BoardChat(self.store, SCHEMAS, make_handlers(self.store), llm=llm)
         self.token = web_token()
         self.verbose = verbose
         self.host = (host or bind_host()).strip() or "127.0.0.1"
@@ -535,7 +535,7 @@ class SharedBoard:
 _LIVE: dict[int, object] = {}
 
 
-def ensure_running(store: Store | None = None, port: int | None = None) -> object:
+def ensure_running(store: Store | None = None, port: int | None = None, llm=None) -> object:
     key = id(store) if store else 0
     srv = _LIVE.get(key)
     if srv is None:
@@ -545,6 +545,6 @@ def ensure_running(store: Store | None = None, port: int | None = None) -> objec
             srv = SharedBoard(want)
             _LIVE[key] = srv
             return srv
-        srv = BoardServer(store=store, port=want).start()
+        srv = BoardServer(store=store, port=want, llm=llm).start()
         _LIVE[key] = srv
     return srv

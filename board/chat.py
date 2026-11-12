@@ -1,30 +1,23 @@
 """A chat session attached to a board.
 
 The board is its own piece: it can be opened anywhere the page is served and still be talked to.
-This module is the agent half of that. It runs a small tool-calling loop against the model
-credentials Hermes already has, with the board's own verbs as the tool surface, so the thing that
-answers in the panel draws with the same code the plugin exposes to any other harness.
+This module is the agent half. A turn goes to the Hermes session the plugin is loaded into
+(``ctx.llm``), so it uses the user's own active model, whatever it is and however it is
+authenticated. No provider is named, no key is read, and no HTTP request is built here.
 
-Why not spawn `hermes chat` per turn: that consumes an active-session lease, and Hermes caps those
-at 3 by default, so a board conversation would fail whenever the user has a desktop and a CLI open.
-Resolving the provider credentials through Hermes (`hermes_cli.auth`) keeps the same model, the same
-key, and the same spend without taking a session slot. The `hermes-cli` backend is kept behind the
-same interface for harnesses that want skills and memory, and it says plainly when a slot is full.
+The model answers with a PLAN, not with native tool calls: ``{"say": ..., "ops": [...]}``. This plugin
+executes the ops against the store. That shape is deliberate. Native tool calling is a per-provider
+feature, so a client that speaks it works on some providers and quietly degrades on others; asking any
+model for JSON works everywhere, including small local ones. One code path, every provider.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import queue
-import subprocess
+import re
 import threading
 import time
-import urllib.error
-import urllib.request
 import uuid
-
-from . import keys as keypool
 
 # Verbs the panel's agent may use. Anything that needs an image pipeline (board_look, board_image)
 # stays out until there is a surface that can show its result in the panel.
@@ -32,33 +25,17 @@ AGENT_TOOLS = ("board_read", "board_draw", "board_stroke", "board_edit", "board_
 MAX_ROUNDS = 4
 HISTORY_CAP = 40
 
+OPS_CONTRACT = """Answer for a whiteboard, not for a chat window.
 
-_POOL = None
-_POOL_MTIME = -1.0
+Return ONE JSON object and nothing else:
+{"say": "<what you tell the user, two sentences at most>", "ops": [{"tool": "<verb>", "args": {...}}]}
 
-
-def _get_pool():
-    """One pool for the process, rebuilt when the keys file changes on disk."""
-    global _POOL, _POOL_MTIME
-    try:
-        mtime = keypool.KEYS_PATH.stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    if _POOL is None or mtime != _POOL_MTIME:
-        _POOL = keypool.pool(os.environ.get("CHARRETTE_CHAT_PROVIDER") or None)
-        _POOL_MTIME = mtime
-    return _POOL
-
-
-def _model_name() -> str:
-    try:
-        import yaml
-        from pathlib import Path
-        cfg = yaml.safe_load((Path.home() / ".hermes" / "config.yaml").read_text())
-        return str((cfg.get("model") or {}).get("default") or "deepseek-v4.1-flash")
-    except Exception:
-        return "deepseek-v4.1-flash"
-
+Rules:
+- "ops" may be empty when the answer is only words.
+- Use only these verbs, with only the arguments their schema names.
+- A turn may hold several ops; they run in order, and each result comes back to you before your next turn.
+- If an op is rejected you will be told why. Fix the args or say what you could not do; never invent success.
+- No markdown, no code fences, no prose outside the JSON."""
 
 def _board_brief(store, bid: str, view: dict | None = None) -> str:
     doc = store.read(bid)
@@ -180,139 +157,37 @@ def _tool_schema(schemas: list[dict]) -> list[dict]:
     return out
 
 
-def _post_json(base_url: str, key: str, payload: dict) -> dict:
-    req = urllib.request.Request(
-        base_url + "/chat/completions",
-        data=json.dumps({**payload, "stream": False}).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        return json.load(resp)
-
-
-def _post_stream(base_url: str, key: str, payload: dict):
-    req = urllib.request.Request(
-        base_url + "/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                 "Accept": "text/event-stream"},
-    )
-    return urllib.request.urlopen(req, timeout=180)
-
 
 class _Cancelled(Exception):
-    """Internal control flow for a run the person explicitly stopped."""
+    """The reader pressed stop."""
 
 
 class _RunState:
-    """Cancellation state shared by the HTTP thread and stop-route thread."""
+    """One live turn. Cancelling closes nothing but a flag: there is no socket to hang up."""
 
     def __init__(self):
-        self.event = threading.Event()
-        self._guard = threading.Lock()
-        self._response = None
-
-    def attach(self, response) -> bool:
-        with self._guard:
-            if self.event.is_set():
-                _close_later(response)
-                return False
-            self._response = response
-            return True
-
-    def detach(self, response) -> None:
-        with self._guard:
-            if self._response is response:
-                self._response = None
+        self.cancelled = False
+        self.started = time.time()
 
     def cancel(self) -> None:
-        self.event.set()
-        with self._guard:
-            response = self._response
-            self._response = None
-        if response is not None:
-            _close_later(response)
-
-
-def _close_later(response) -> None:
-    """Close without letting a provider's I/O lock block the stop route."""
-    def close():
-        try:
-            response.close()
-        except Exception:
-            pass
-
-    threading.Thread(target=close, daemon=True, name="charrette-provider-close").start()
+        self.cancelled = True
 
 
 def _check(run: _RunState) -> None:
-    if run.event.is_set():
-        raise _Cancelled
-
-
-def _open_cancellable(run: _RunState, opener):
-    """Open a provider off-thread so cancellation is not hostage to urlopen()."""
-    out = queue.Queue(maxsize=1)
-
-    def work():
-        try:
-            response = opener()
-            if not isinstance(response, dict) and not run.attach(response):
-                return
-            out.put(("ok", response))
-        except BaseException as exc:  # transport errors are returned to the owning thread
-            out.put(("error", exc))
-
-    threading.Thread(target=work, daemon=True, name="charrette-provider-open").start()
-    while True:
-        _check(run)
-        try:
-            kind, value = out.get(timeout=0.05)
-        except queue.Empty:
-            continue
-        if kind == "error":
-            raise value
-        return value
-
-
-def _response_chunks(run: _RunState, response):
-    """Read a provider off-thread and expose cancellable, bounded waits."""
-    out = queue.Queue()
-
-    def read():
-        try:
-            with response as opened:
-                for raw in opened:
-                    out.put(("data", raw))
-        except BaseException as exc:
-            out.put(("error", exc))
-        finally:
-            run.detach(response)
-            out.put(("done", None))
-
-    threading.Thread(target=read, daemon=True, name="charrette-provider-read").start()
-    while True:
-        _check(run)
-        try:
-            kind, value = out.get(timeout=0.05)
-        except queue.Empty:
-            continue
-        _check(run)
-        if kind == "data":
-            yield value
-        elif kind == "error":
-            raise value
-        else:
-            return
+    if run.cancelled:
+        raise _Cancelled()
 
 
 class BoardChat:
     """One conversation per board, streamed as server-sent events."""
 
-    def __init__(self, store, schemas: list[dict], handlers: dict):
+    def __init__(self, store, schemas: list[dict], handlers: dict, llm=None):
         self.store = store
         self.schemas = _tool_schema(schemas)
         self.handlers = handlers
+        self.llm = llm
+        self.provider = ""     # filled from the first turn: the session decides, not a config read
+        self.model = ""
         self._locks: dict[str, threading.Lock] = {}
         self._runs: dict[str, _RunState] = {}
         self._guard = threading.Lock()
@@ -323,13 +198,11 @@ class BoardChat:
             return self._locks.setdefault(bid, threading.Lock())
 
     def info(self) -> dict:
-        pool = _get_pool()
-        routes = pool.describe()
-        first = next((r for r in routes if r["ready"]), routes[0] if routes else {})
-        return {"backend": "pool", "provider": first.get("name", "none"),
-                "model": first.get("model") or _model_name(),
-                "ready": bool(routes) and pool.ready(), "source": first.get("source", "missing"),
-                "keys": routes, "tools": list(AGENT_TOOLS)}
+        """What the panel shows above the composer. The model comes from Hermes, so it is asked lazily."""
+        return {"backend": "hermes", "provider": self.provider or "hermes",
+                "model": self.model or "the session's model",
+                "ready": self.llm is not None, "source": "hermes session",
+                "keys": [], "tools": list(AGENT_TOOLS)}
 
     def history(self, bid: str) -> list[dict]:
         doc = self.store.read(bid)
@@ -353,9 +226,17 @@ class BoardChat:
             return {**doc, "chat": chat[-HISTORY_CAP:]}
         self.store.write(bid, apply)
 
+    # ---------------------------------------------------------------- the model
+    def _ask(self, convo: list[dict]) -> dict:
+        """One turn on the Hermes session. Returns the parsed plan."""
+        result = self.llm.complete(convo, temperature=0.4, max_tokens=1400, timeout=180)
+        self.provider = getattr(result, "provider", "") or self.provider
+        self.model = getattr(result, "model", "") or self.model
+        return _parse_plan(result.text)
+
     # ---------------------------------------------------------------- run
     def stream(self, bid: str, text: str, view: dict | None = None):
-        """Yield SSE frames. Tool calls execute against the store as they arrive."""
+        """Yield SSE frames. Ops execute against the store as they are planned."""
         lock = self._lock(bid)
         if not lock.acquire(blocking=False):
             yield _sse({"type": "error", "error": "this board is already answering a message"})
@@ -365,146 +246,54 @@ class BoardChat:
         with self._guard:
             self._runs[bid] = run
         try:
-            pool = _get_pool()
-            if not pool.entries:
+            if self.llm is None:
                 yield _sse({"type": "error",
-                            "error": "no model keys: add one with `python3 scripts/keys.py add <name>`, "
-                                     "or run `hermes auth` for ollama-cloud"})
+                            "error": "the board answers through Hermes; this process has no model seam"})
                 return
-            model = _model_name()
             self._append(bid, {"role": "user", "text": text, "at": _now()})
-            messages = [{"role": "system", "content": SYSTEM.replace("__BRIEF__", _board_brief(self.store, bid, view))}]
+            convo = [{"role": "system", "content": SYSTEM.replace("__BRIEF__", _board_brief(self.store, bid, view))},
+                     {"role": "system", "content": OPS_CONTRACT}]
             for m in self.history(bid)[-16:]:
                 if m.get("role") in ("user", "assistant") and m.get("text"):
-                    messages.append({"role": m["role"], "content": m["text"]})
-            yield _sse({"type": "start", "model": model, "keys": len(pool.entries),
-                        "session": self._session_id(bid)})
+                    convo.append({"role": m["role"], "content": m["text"]})
+            yield _sse({"type": "start", "model": self.model or "the session's model",
+                        "provider": self.provider or "hermes", "session": self._session_id(bid)})
 
             said = []
-            announced = False
-            for round_no in range(MAX_ROUNDS + 1):
+            announced_route = False
+            for _round in range(MAX_ROUNDS + 1):
                 _check(run)
-                payload_base = {"messages": messages, "stream": True, "temperature": 0.4}
-                if round_no < MAX_ROUNDS:
-                    payload_base["tools"] = self.schemas
-                calls, chunk_text = {}, []
-                # a run walks the pool: a 429 or a bad key costs one route, not the message
-                resp = None
-                route = None
-                failures = []
-                for candidate in pool.candidates():
-                    _check(run)
-                    route_model = (candidate["models"] or [model])[0]
-                    try:
-                        if candidate.get("stream", True):
-                            resp = _open_cancellable(
-                                run,
-                                lambda candidate=candidate, route_model=route_model: _post_stream(
-                                    candidate["base_url"], candidate["api_key"],
-                                    {**payload_base, "model": route_model}),
-                            )
-                        else:
-                            # Some OpenAI-compatible layers return tool calls as XML text while
-                            # streaming. Ask for one JSON body instead, and parse the message.
-                            resp = _open_cancellable(
-                                run,
-                                lambda candidate=candidate, route_model=route_model: _post_json(
-                                    candidate["base_url"], candidate["api_key"],
-                                    {**payload_base, "model": route_model}),
-                            )
-                        route = candidate
-                        pool.note_hit(candidate["name"])
-                        break
-                    except _Cancelled:
-                        raise
-                    except urllib.error.HTTPError as exc:
-                        body = exc.read(400).decode("utf-8", "replace").strip()
-                        failures.append(f"{candidate['name']} {exc.code}")
-                        pool.note_failure(candidate["name"], f"HTTP {exc.code} {body[:120]}")
-                    except Exception as exc:  # noqa: BLE001
-                        failures.append(f"{candidate['name']} {type(exc).__name__}")
-                        pool.note_failure(candidate["name"], f"{type(exc).__name__}: {exc}")
-                if resp is None:
-                    yield _sse({"type": "error",
-                                "error": "no key answered: " + (", ".join(failures) or "pool empty")})
-                    return
-                if route and not announced:
-                    announced = True
-                    yield _sse({"type": "route", "name": route["name"], "model": route_model})
-
-                finish = None
-                if isinstance(resp, dict):
-                    msg = ((resp.get("choices") or [{}])[0].get("message") or {})
-                    if msg.get("content"):
-                        chunk_text.append(msg["content"])
-                        yield _sse({"type": "text", "delta": msg["content"]})
-                    for i, tc in enumerate(msg.get("tool_calls") or []):
-                        calls[i] = {"id": tc.get("id") or f"call_{i}",
-                                    "name": (tc.get("function") or {}).get("name") or "",
-                                    "args": (tc.get("function") or {}).get("arguments") or "{}"}
-                    finish = ((resp.get("choices") or [{}])[0].get("finish_reason"))
-                if not isinstance(resp, dict):
-                    for raw in _response_chunks(run, resp):
-                        _check(run)
-                        line = raw.decode("utf-8", "replace").strip()
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            evt = json.loads(data)
-                        except ValueError:
-                            continue
-                        choice = (evt.get("choices") or [{}])[0]
-                        delta = choice.get("delta") or {}
-                        if delta.get("content"):
-                            chunk_text.append(delta["content"])
-                            yield _sse({"type": "text", "delta": delta["content"]})
-                        for tc in delta.get("tool_calls") or []:
-                            idx = tc.get("index", 0)
-                            slot = calls.setdefault(idx, {"id": "", "name": "", "args": ""})
-                            if tc.get("id"):
-                                slot["id"] = tc["id"]
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                slot["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                slot["args"] += fn["arguments"]
-                        if choice.get("finish_reason"):
-                            finish = choice["finish_reason"]
-
-                if route:
-                    pool.note_success(route["name"])
-                text_so_far = "".join(chunk_text)
-                if text_so_far:
-                    said.append(text_so_far)
-                    messages.append({"role": "assistant", "content": text_so_far})
-                if not calls:
+                plan = self._ask(convo)
+                if self.provider and not announced_route:
+                    announced_route = True
+                    yield _sse({"type": "route", "name": self.provider, "model": self.model})
+                # a second round often restates what the first one already said; keep the sentence
+                # once, or the panel shows the same line growing a beard
+                line = str(plan.get("say") or "").strip()
+                if line and (not said or line != said[-1]):
+                    said.append(line)
+                    yield _sse({"type": "text", "delta": line})
+                ops = [op for op in (plan.get("ops") or []) if isinstance(op, dict)]
+                if not ops:
                     break
-                messages.append({"role": "assistant", "content": text_so_far or None,
-                                 "tool_calls": [
-                                     {"id": s["id"] or f"call_{i}", "type": "function",
-                                      "function": {"name": s["name"], "arguments": s["args"] or "{}"}}
-                                     for i, s in sorted(calls.items())]})
-                for i, slot in sorted(calls.items()):
+                convo.append({"role": "assistant", "content": json.dumps({"say": plan.get("say") or "",
+                                                                          "ops": ops})[:4000]})
+                results = []
+                for op in ops:
                     _check(run)
-                    name = slot["name"]
-                    try:
-                        args = json.loads(slot["args"] or "{}")
-                    except ValueError:
-                        args = {}
+                    name = str(op.get("tool") or op.get("name") or "")
+                    args = op.get("args") if isinstance(op.get("args"), dict) else {}
                     args.pop("board", None)
-                    args = _normalise_args(name, args)
-                    args["board"] = bid
-                    handler = self.handlers.get(name)
-                    if not handler:
-                        result = {"err": "E_TOOL", "message": f"no such verb: {name}"}
-                    else:
-                        try:
+                    try:
+                        args = _normalise_args(name, args)
+                        args["board"] = bid
+                        handler = self.handlers.get(name)
+                        if not handler:
+                            result = {"err": "E_TOOL", "message": f"no such verb: {name}"}
+                        else:
                             result = handler(args)
-                        except Exception as exc:  # noqa: BLE001
-                            result = {"err": "E_TOOL", "message": f"{type(exc).__name__}: {exc}"}
+                    except Exception as exc:  # noqa: BLE001 — a bad op must not end the turn
+                        result = {"err": "E_TOOL", "message": f"{type(exc).__name__}: {exc}"}
                     # verbs answer with a dict or with a plain sentence; normalise both so the
                     # model and the panel see the same thing
                     if isinstance(result, str):
@@ -518,18 +307,19 @@ class BoardChat:
                     if "text" in result_obj:
                         brief["text"] = str(result_obj["text"])[:160]
                     yield _sse({"type": "tool", "name": name, "args": args, "result": brief})
-                    messages.append({"role": "tool", "tool_call_id": slot["id"] or f"call_{i}",
-                                     "content": json.dumps(result_obj)[:4000]})
+                    results.append({"tool": name, "result": brief})
+                convo.append({"role": "user",
+                              "content": "results: " + json.dumps(results)[:4000]})
 
             answer = "\n\n".join(said).strip()
-            # which objects this run touched: anything whose rev moved past the rev
-            # the run started at, in the order they were first written
+            # which objects this run touched: anything whose rev moved past the rev the run started
+            # at, in the order it was first written
             doc_now = self.store.read(bid)
             touched = [(oid, o) for oid, o in (doc_now.get("objects") or {}).items()
                        if (o.get("rev") or 0) > run_start_rev]
             touched.sort(key=lambda kv: (kv[1].get("created") or 0, kv[1].get("rev") or 0))
-            # a run that drew but said nothing still has a body of work to replay, so it
-            # still gets a message: the replay chip is how the reader sees what it did
+            # a run that drew but said nothing still has a body of work to replay, so it still gets a
+            # message: the replay chip is how the reader sees what it did
             if answer or touched:
                 msg = {"role": "assistant", "text": answer, "at": _now()}
                 if touched:
@@ -559,16 +349,36 @@ class BoardChat:
         return sid
 
 
+def _parse_plan(text: str) -> dict:
+    """Take the model's JSON plan, tolerating fences and a sentence wrapped around it."""
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        got = json.loads(raw)
+    except ValueError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            # no JSON at all: treat the whole reply as the sentence, so the turn is not lost
+            return {"say": raw[:1200], "ops": []}
+        try:
+            got = json.loads(raw[start:end + 1])
+        except ValueError:
+            return {"say": raw[:1200], "ops": []}
+    if not isinstance(got, dict):
+        return {"say": raw[:1200], "ops": []}
+    say = got.get("say") or got.get("text") or ""
+    ops = got.get("ops")
+    if ops is None:
+        ops = got.get("calls") or []
+    if not isinstance(ops, list):
+        ops = []
+    return {"say": str(say), "ops": ops}
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-class _null_iter:
-    def __enter__(self):
-        return iter(())
-
-    def __exit__(self, *exc):
-        return False
 
 
 def _sse(obj: dict) -> bytes:

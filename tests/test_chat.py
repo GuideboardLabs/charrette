@@ -101,59 +101,72 @@ def _events(frames):
     return [json.loads(frame.decode().split("data: ", 1)[1]) for frame in frames]
 
 
+class _FakeLlm:
+    """Stands in for the host facade. ``on_call`` runs inside the turn, which is where a cancel lands."""
+
+    def __init__(self, reply: str = '{"say": "finished", "ops": []}', on_call=None):
+        self.reply = reply
+        self.on_call = on_call
+        self.calls = 0
+
+    def complete(self, messages, **_kw):
+        self.calls += 1
+        if self.on_call:
+            self.on_call(self.calls)
+        class R:
+            text = self.reply
+        return R()
+
+
 class BoardChatCancellationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(Path(self.tmp.name))
-        self.calls = []
-        self.chat = BoardChat(self.store, [], {"board_draw": lambda args: self.calls.append(args) or {"ok": True}})
-        self.blocking = _BlockingResponse()
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _post(self, _base, _key, payload):
-        user = next((m.get("content", "") for m in reversed(payload["messages"])
-                     if m.get("role") == "user"), "")
-        return self.blocking if user == "block" else _ImmediateResponse()
+    def _chat(self, llm, calls=None):
+        handler = lambda args: (calls.append(args) if calls is not None else None) or {"ok": True}
+        return BoardChat(self.store, [], {"board_draw": handler}, llm=llm)
 
-    def test_cancel_interrupts_blocked_read_without_dispatching_or_storing_partial_reply(self):
+    def test_cancel_stops_the_turn_before_the_next_model_call(self):
+        """A cancel sets the flag the loop checks between steps, so no second call and no partial message."""
         frames = []
-        worker = threading.Thread(target=lambda: frames.extend(self.chat.stream("b1", "block")))
-        with patch("board.chat._get_pool", return_value=_Pool()), \
-             patch("board.chat._post_stream", side_effect=self._post), \
-             patch("board.chat._model_name", return_value="fake-model"):
-            worker.start()
-            self.assertTrue(self.blocking.reading.wait(1), "fake provider never reached its blocked read")
-            self.assertTrue(self.chat.cancel("b1"))
-            worker.join(1)
+        holder = {}
 
-        self.assertFalse(worker.is_alive(), "cancel left the board stream blocked")
-        self.assertTrue(self.blocking.closed.wait(1), "cancel did not close the active response")
-        self.assertEqual(self.calls, [])
-        events = _events(frames)
-        self.assertEqual([e["type"] for e in events].count("stopped"), 1)
-        self.assertNotIn("done", [e["type"] for e in events])
-        self.assertEqual([m["role"] for m in self.chat.history("b1")], ["user"])
+        def on_call(n):
+            if n == 1:                       # the first plan asks for work, then we cancel
+                holder["chat"].cancel("b1")
+        llm = _FakeLlm('{"say": "drawing", "ops": [{"tool": "board_draw", "args": {}}]}', on_call=on_call)
+        calls = []
+        chat = self._chat(llm, calls)
+        holder["chat"] = chat
+
+        events = _events(list(chat.stream("b1", "draw something")))
+        kinds = [e["type"] for e in events]
+
+        self.assertEqual(kinds.count("stopped"), 1)
+        self.assertNotIn("done", kinds)
+        self.assertEqual(llm.calls, 1, "the run kept calling the model after cancel")
+        self.assertEqual(calls, [], "a cancelled plan still executed an op")
+        self.assertEqual([m["role"] for m in chat.history("b1")], ["user"])
 
     def test_cancel_is_scoped_to_one_board_and_reports_inactive_runs(self):
-        blocked_frames = []
-        worker = threading.Thread(target=lambda: blocked_frames.extend(self.chat.stream("b1", "block")))
-        with patch("board.chat._get_pool", return_value=_Pool()), \
-             patch("board.chat._post_stream", side_effect=self._post), \
-             patch("board.chat._model_name", return_value="fake-model"):
-            worker.start()
-            self.assertTrue(self.blocking.reading.wait(1))
-            other = _events(list(self.chat.stream("b2", "finish")))
-            self.assertEqual(other[-1]["type"], "done")
-            self.assertEqual(other[-1]["text"], "finished")
-            self.assertFalse(self.chat.cancel("missing"))
-            self.assertTrue(self.chat.cancel("b1"))
-            worker.join(1)
+        llm = _FakeLlm('{"say": "finished", "ops": []}')
+        chat = self._chat(llm)
 
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(_events(blocked_frames)[-1]["type"], "stopped")
-        self.assertEqual([m["role"] for m in self.chat.history("b2")], ["user", "assistant"])
+        other = _events(list(chat.stream("b2", "hello")))
+        self.assertEqual(other[-1]["type"], "done")
+        self.assertEqual(other[-1]["text"], "finished")
+        self.assertFalse(chat.cancel("missing"), "an inactive board reported a live run")
+        self.assertEqual([m["role"] for m in chat.history("b2")], ["user", "assistant"])
+
+    def test_no_session_means_a_plain_error_not_a_guess(self):
+        chat = self._chat(None)
+        events = _events(list(chat.stream("b1", "hello")))
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertIn("no model seam", events[-1]["error"])
 
 
 if __name__ == "__main__":

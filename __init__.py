@@ -16,10 +16,28 @@ from .board.store import DEFAULT_BOARD, Store
 from .tools import SCHEMAS, make_handlers
 
 
-def _serve(store: Store, port: int = 0, open_browser: bool = False) -> str:
+
+_HOST_CTX = None
+
+
+def _llm_from(ctx=None):
+    """The host's own LLM facade: the user's active model and auth, whatever provider that is.
+
+    ``ctx`` is passed where a closure has it. The ``hermes charrette open`` path does not, so the
+    context captured when the plugin registered is the fallback. Without either, the board still
+    serves and draws by hand; only the chat panel needs a model, and it says so instead of guessing.
+    """
+    host = ctx if ctx is not None else _HOST_CTX
+    try:
+        return host.llm
+    except Exception:
+        return None
+
+
+def _serve(store: Store, port: int = 0, open_browser: bool = False, llm=None) -> str:
     from .web.server import ensure_running
 
-    server = ensure_running(store, port=port)
+    server = ensure_running(store, port=port, llm=llm)
     url = server.url
     if open_browser:
         webbrowser.open(url)
@@ -44,7 +62,8 @@ def _cli_handler(args):
             print(f"  {board['id']:<4} {board['name'][:28]:<28} rev {board['rev']:<5} "
                   f"{board['objects']} objects, newest {last}")
         return
-    url = _serve(store, port=getattr(args, "port", 0), open_browser=getattr(args, "open", False))
+    url = _serve(store, port=getattr(args, "port", 0), open_browser=getattr(args, "open", False),
+                 llm=_llm_from())
     print(url, flush=True)
     print("serving; ctrl-c to stop", flush=True)
     try:
@@ -55,6 +74,8 @@ def _cli_handler(args):
 
 
 def register(ctx):
+    global _HOST_CTX
+    _HOST_CTX = ctx
     store = Store()
     store.ensure_board(DEFAULT_BOARD, "board 1")
 
@@ -84,7 +105,7 @@ def register(ctx):
     )
 
     def board_command(raw_args: str) -> str:
-        url = _serve(store)
+        url = _serve(store, llm=_llm_from(ctx))
         # Put the board where the user is looking: the pane beside the chat,
         # for the window that asked. A TUI or a gateway without desktop UI
         # still gets the link below, so this is best-effort by design.
