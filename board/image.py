@@ -26,6 +26,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from . import safety
+
 UA = "charrette-hermes-plugin/0.1 (+https://github.com/GuideboardLabs/charrette)"
 COMMONS = "https://commons.wikimedia.org/w/api.php"
 
@@ -39,8 +41,8 @@ class ImageError(Exception):
 
 
 def config(root: Path) -> dict:
-    cfg = {"endpoint": os.environ.get("CHARRETTE_IMAGE_ENDPOINT", ""),
-           "key": os.environ.get("CHARRETTE_IMAGE_KEY", ""),
+    cfg = {"endpoint": safety.secret("CHARRETTE_IMAGE_ENDPOINT"),
+           "key": safety.secret("CHARRETTE_IMAGE_KEY"),
            "model": os.environ.get("CHARRETTE_IMAGE_MODEL", ""),
            "steps": os.environ.get("CHARRETTE_IMAGE_STEPS", "")}
     try:
@@ -220,24 +222,31 @@ def _from_tool_result(res, root: Path) -> tuple[bytes, str]:
         if cand.startswith("data:image/") and ";base64," in cand:
             return base64.b64decode(cand.split(",", 1)[1]), "inline"
         if cand.startswith("http"):
-            return _http(cand, timeout=60), cand
-        p = Path(cand.replace("file://", ""))
-        if p.is_file():
-            return p.read_bytes(), str(p)
+            return safety.fetch(cand, timeout=60, ua=UA), cand
+        # a path lifted out of a tool result is not a path the user chose: it is refused here
+        # and has to go through board_image source=path, which checks the import directory
+        if cand.startswith(("file:", "/", "~")):
+            raise ImageError("E_ARGS", "image_generate returned a local path; put the file in the "
+                                       "import directory and use source=path")
     raise ImageError("E_IMAGE", "image_generate returned no usable path or URL")
 
 
 def fetch_url(url: str, dest: Path) -> dict:
+    """An image from a URL the model supplied. Private, loopback and link-local hosts are refused."""
     if not url.lower().startswith(("http://", "https://")):
         raise ImageError("E_ARGS", "url must be http(s)")
-    blob = _http(url, timeout=45)
-    mime = "image/png" if url.lower().endswith(".png") else "image/jpeg"
-    return _save(blob, dest, Path(url).name, url, mime)
+    try:
+        blob = safety.fetch(url, timeout=45, ua=UA)
+    except ValueError as exc:
+        raise ImageError("E_URL", str(exc)) from None
+    mime = safety.sniff_mime(blob) or "image/png"
+    return _save(blob, dest, Path(urllib.parse.urlsplit(url).path).name or "image", url, mime)
 
 
 def read_path(path: str, dest: Path) -> dict:
-    p = Path(path).expanduser()
-    if not p.is_file():
-        raise ImageError("E_ARGS", f"no such file: {path}")
-    blob = p.read_bytes()
-    return _save(blob, dest, p.name, str(p), "image/png")
+    """An image the user already has. Only the import directory, and only if it decodes."""
+    try:
+        blob, mime = safety.read_import(path, dest.parent.parent)
+    except ValueError as exc:
+        raise ImageError("E_ARGS", str(exc)) from None
+    return _save(blob, dest, Path(path).name, str(Path(path).expanduser()), mime)

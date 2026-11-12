@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import safety
+
 SCHEMA = "charrette/1"
 DEFAULT_BOARD = "b1"
 
@@ -26,8 +28,8 @@ def default_root() -> Path:
     env = os.environ.get("CHARRETTE_DATA_DIR")
     if env:
         return Path(env).expanduser()
-    home = os.environ.get("HERMES_HOME") or "~/.hermes"
-    return Path(home).expanduser() / "charrette"
+    # the active profile, not a hardcoded home: boards and control.json follow --profile
+    return safety.hermes_home() / "charrette"
 
 
 class RevConflict(Exception):
@@ -303,6 +305,10 @@ def apply_objects(upserts=None, deletes=None):
             if not oid:
                 continue
             merged = {**objs.get(oid, {}), **{k: v for k, v in o.items() if k not in ("id", "_key")}}
+            # an image name is the only thing that later becomes a file read, so it is the one
+            # field a writer cannot choose freely
+            if "src" in merged and merged["src"] is not None and not safety.valid_src(merged["src"]):
+                continue
             # The box is a fact about the ink, not an opinion the writer gets to hold.
             # A moved stroke that kept its old box is why hit tests, selection and framing
             # all pointed at where the object used to be.

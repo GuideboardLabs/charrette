@@ -40,6 +40,7 @@ from ..board.render import render_crop
 from ..board.replay import build_timeline, pick_objects
 from ..board.store import DEFAULT_BOARD, RevConflict, Store, add_stroke, apply_objects
 from ..tools import SCHEMAS, make_handlers
+from ..board import safety
 
 HERE = Path(__file__).resolve().parent
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -193,11 +194,10 @@ class _Handler(BaseHTTPRequestHandler):
             bid = (query.get("board") or [DEFAULT_BOARD])[0]
             oid = (query.get("id") or [""])[0]
             obj = (store.read(bid).get("objects") or {}).get(oid) or {}
-            src = obj.get("src")
-            if not src:
+            file = safety.image_path(store.root, obj.get("src"))
+            if file is None:
                 self._json(404, {"error": "E_NO_IMAGE"})
                 return
-            file = store.root / "images" / src
             if not file.is_file():
                 self._json(404, {"error": "E_MISSING_FILE"})
                 return
@@ -363,7 +363,7 @@ CONTROL_LIMIT = 40
 
 
 def _control_path() -> Path:
-    return Path.home() / ".hermes" / "charrette" / "control.json"
+    return safety.hermes_home() / "charrette" / "control.json"
 
 
 def _control_read() -> dict:

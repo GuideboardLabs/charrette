@@ -14,6 +14,8 @@ import json
 import math
 from pathlib import Path
 
+from . import safety
+
 ROOT = Path(__file__).resolve().parent.parent
 PEN_SPEED = 620.0   # board px per second: someone with a marker in their hand
 GAP_MS = 260        # a beat between objects
@@ -118,9 +120,9 @@ def build_html(doc: dict, store_root: Path, picked, caption: str = "", speed: fl
     font_b64 = base64.b64encode(font_path.read_bytes()).decode()
     images = {}
     for _i, obj in picked:
-        if obj.get("kind") == "image" and obj.get("src"):
-            path = Path(store_root) / "images" / obj["src"]
-            if path.exists():
+        if obj.get("kind") == "image":
+            path = safety.image_path(store_root, obj.get("src"))
+            if path is not None and path.exists():
                 images[obj["src"]] = ("data:image/png;base64,"
                                       + base64.b64encode(path.read_bytes()).decode())
     html = (_TEMPLATE

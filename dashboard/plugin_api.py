@@ -17,6 +17,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import APIRouter, Body, HTTPException, Query  # noqa: E402
 
 from board.store import DEFAULT_BOARD, RevConflict, Store, add_stroke, apply_objects  # noqa: E402
+from board import safety
 
 router = APIRouter()
 store = Store()
@@ -35,9 +36,11 @@ def img(bid: str = Query(DEFAULT_BOARD, alias="board"), oid: str = Query(..., al
 
     doc = store.read(bid)
     obj = (doc.get("objects") or {}).get(oid)
-    if not obj or obj.get("kind") != "image" or not obj.get("src"):
+    if not obj or obj.get("kind") != "image":
         raise HTTPException(status_code=404, detail="no such image")
-    path = store.root / "images" / obj["src"]
+    path = safety.image_path(store.root, obj.get("src"))
+    if path is None:
+        raise HTTPException(status_code=404, detail="no such image")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="image file missing")
     mime = mimetypes.guess_type(path.name)[0] or "image/png"

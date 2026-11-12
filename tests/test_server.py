@@ -157,14 +157,13 @@ class BoardServerContractTests(unittest.TestCase):
     def test_director_channel_queues_a_cue_and_hands_it_back_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            home.mkdir()
-            (home / ".hermes" / "charrette").mkdir(parents=True)
+            (home / "charrette").mkdir(parents=True)
             store = Store(Path(tmp) / "boards")
             server = BoardServer(store=store, port=0).start()
             base = f"http://127.0.0.1:{server.port}"
             import unittest.mock as mock
             try:
-                with mock.patch("pathlib.Path.home", return_value=home):
+                with mock.patch.dict("os.environ", {"HERMES_HOME": str(home)}):
                     req = urllib.request.Request(
                         f"{base}/api/control?t={server.token}",
                         data=json.dumps({"cmd": "replay", "ids": ["a1"], "speed": 2}).encode(),

@@ -1,6 +1,6 @@
 name: charrette
 label: Charrette
-version: "0.2.2"
+version: "0.3.0"
 manifest_version: 2
 requires_hermes: ">=0.22"
 description: >-
@@ -16,9 +16,25 @@ description: >-
   human both write on, and the same document renders headlessly to a PNG for a report or a page.
   Disclosure - runs a local web server, bound to 127.0.0.1:8196 by default, and prints a per-session
   token in the URL; setting CHARRETTE_BIND and CHARRETTE_PUBLIC_BASE serves it past loopback, where
-  anyone holding that token controls the board. board_image sends the prompt or URL to the configured
-  image provider. Boards and their chat logs are JSON on disk under the plugin data directory.
+  anyone holding that token controls the board. board_image sends the prompt to the image provider you
+  configure and reads CHARRETTE_IMAGE_KEY and CHARRETTE_IMAGE_ENDPOINT from the profile secret store. A
+  URL it is given is fetched only if every hop resolves to a public address, so private, loopback and
+  link-local targets including 169.254.169.254 are refused. A local file is read only from the import
+  directory (CHARRETTE_IMPORT_DIR, default <data>/imports), must decode as a PNG, JPEG or WebP, and is
+  copied in rather than referenced. Image names in a board are validated on write and on every read, so
+  a stored name is always one this plugin generated. Boards and their chat logs are JSON on disk under
+  the plugin data directory, which resolves per profile.
 author: Guideboard Labs
+requires_env:
+  - name: CHARRETTE_IMAGE_ENDPOINT
+    description: OpenAI-shaped image endpoint, e.g. http://127.0.0.1:8191. Optional; without it board_image falls back to board_look crops and search.
+    required: false
+  - name: CHARRETTE_IMAGE_KEY
+    description: Bearer token for that endpoint, read from the profile secret store so each profile uses its own.
+    required: false
+  - name: CHARRETTE_IMPORT_DIR
+    description: The only directory board_image source=path will read from. Defaults to <data>/imports.
+    required: false
 provides_tools:
   - board_read
   - board_draw

@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - degraded mode is tested by import failur
 from .board import image as image_mod
 from .board.render import render_crop
 from .board.replay import write_replay
+from .board import safety
 from .board.store import (
     DEFAULT_BOARD,
     RevConflict,
@@ -931,9 +932,9 @@ def make_handlers(store: Store, dispatch=None, llm=None) -> dict:
         files.append({"kind": "document", "file": "board.json", "bytes": (out_dir / "board.json").stat().st_size})
         # every picture on the board
         for oid, obj in (doc.get("objects") or {}).items():
-            if obj.get("kind") != "image" or not obj.get("src"):
+            src = safety.image_path(store.root, obj.get("src")) if obj.get("kind") == "image" else None
+            if src is None:
                 continue
-            src = store.root / "images" / obj["src"]
             if not src.exists():
                 files.append({"kind": "image", "id": oid, "missing": obj["src"]})
                 continue
